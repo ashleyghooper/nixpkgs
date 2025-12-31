@@ -33,6 +33,53 @@ in
         Defaults to pkgs.lvm2, pkgs.lvm2_dmeventd if dmeventd or pkgs.lvm2_vdo if vdo is enabled.
       '';
     };
+
+    autoActivationVolumeList = mkOption {
+      type = types.nullOr (types.listOf types.str);
+      default = null;
+      description = ''
+        List of LVM logical volumes to auto-activate.
+        Note that if a value of [] is provided, no devices will use auto-activation.
+        Example: [ "vg_main-lv_data" ].
+      '';
+    };
+
+    filter = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = ''
+        List of LVM filter rules controlling which devices are scanned during normal operations.
+        Example: [ "a|/dev/drbd.*|" "r|.*|" ].
+      '';
+    };
+
+    globalFilter = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = ''
+        List of LVM global filter rules controlling which devices are scanned during all operations.
+        Example: [ "a|/dev/drbd.*|" "r|.*|" ].
+      '';
+    };
+
+    lvmlockd = mkOption {
+      type = types.nullOr (types.submodule {
+        options = {
+          enable =
+            mkEnableOption "Use the LVM locking daemon"
+            // {
+              default = false;
+            };
+          retries = mkOption {
+            type = types.int;
+            default = null;
+            description = "The number of retries for lvmlockd to use";
+          };
+        };
+      });
+      default = null;
+    };
+
     dmeventd.enable = mkEnableOption "the LVM dmevent daemon";
     boot.thin.enable = mkEnableOption "support for booting from ThinLVs";
     boot.vdo.enable = mkEnableOption "support for booting from VDOLVs";
@@ -67,6 +114,66 @@ in
       boot.initrd.systemd.initrdBin = [ cfg.package ];
       boot.initrd.services.udev.binPackages = [ cfg.package ];
     })
+    (
+      mkIf (cfg.autoActivationVolumeList != null) (
+        let
+          quotedAutoActivationVolumes = map (s: ''"${s}"'') cfg.autoActivationVolumeList;
+          autoActivationLine = ''auto_activation_volume_list = [ ${concatStringsSep ", " quotedAutoActivationVolumes} ]'';
+          lvmConfigActivationSection = ''
+            activation {
+              ${autoActivationLine}
+            }
+          '';
+        in {
+          environment.etc."lvm/lvm.conf".text = lvmConfigActivationSection;
+          boot.initrd.systemd.contents."/etc/lvm/lvm.conf".text = lvmConfigActivationSection;
+        }
+      )
+    )
+    (
+      mkIf (cfg.filter != [] || cfg.globalFilter != []) (
+        let
+          quotedFilters = map (s: ''"${s}"'') cfg.filter;
+          filterLine =
+            optionalString (cfg.filter != [])
+            ''filter = [ ${concatStringsSep ", " quotedFilters} ]'';
+          quotedGlobalFilters = map (s: ''"${s}"'') cfg.globalFilter;
+          globalFilterLine =
+            optionalString (cfg.globalFilter != [])
+            ''global_filter = [ ${concatStringsSep ", " quotedGlobalFilters} ]'';
+          lvmConfigDevicesSection = ''
+            devices {
+              ${filterLine}
+              ${globalFilterLine}
+            }
+          '';
+        in {
+          environment.etc."lvm/lvm.conf".text = lvmConfigDevicesSection;
+          boot.initrd.systemd.contents."/etc/lvm/lvm.conf".text = lvmConfigDevicesSection;
+        }
+      )
+    )
+    (
+      mkIf (cfg.lvmlockd != null && cfg.lvmlockd.enable) (
+        let
+          useLvmlockdLine =
+            optionalString (cfg.lvmlockd.enable)
+            "use_lvmlockd = 1";
+          lvmlockdRetriesLine =
+            optionalString (cfg.lvmlockd.retries != null)
+            "lvmlockd_lock_retries = ${toString cfg.lvmlockd.retries}";
+          lvmConfigGlobalSection = ''
+            global {
+              ${useLvmlockdLine}
+              ${lvmlockdRetriesLine}
+            }
+          '';
+        in {
+          environment.etc."lvm/lvm.conf".text = lvmConfigGlobalSection;
+          boot.initrd.systemd.contents."/etc/lvm/lvm.conf".text = lvmConfigGlobalSection;
+        }
+      )
+    )
     (mkIf cfg.dmeventd.enable {
       systemd.sockets."dm-event".wantedBy = [ "sockets.target" ];
       systemd.services."lvm2-monitor".wantedBy = [ "sysinit.target" ];
