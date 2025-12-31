@@ -16811,6 +16811,10 @@ self: super: with self; {
 
   sanix = callPackage ../development/python-modules/sanix { };
 
+  sanlock = callPackage ../development/python-modules/sanlock {
+    sanlockC = pkgs.sanlock;
+  };
+
   sansio-multipart = callPackage ../development/python-modules/sansio-multipart { };
 
   sarge = callPackage ../development/python-modules/sarge { };
